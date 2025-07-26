@@ -1,207 +1,203 @@
 <?php
+
 if (! defined('WP_DEBUG')) {
     die('Direct access forbidden.');
 }
 
-// Enqueue style dari parent theme
+// Enqueue style parent theme
 add_action('wp_enqueue_scripts', function() {
     wp_enqueue_style('parent-style', get_template_directory_uri() . '/style.css');
 });
 
-// Daftar Custom Post Type Media dengan dukungan thumbnail
-function esaco_register_post_type_media() {
-    $labels = array(
-        'name'                  => _x('Media', 'Post Type General Name', 'esaco'),
-        'singular_name'         => _x('Media', 'Post Type Singular Name', 'esaco'),
-        'menu_name'             => __('Media', 'esaco'),
-        'name_admin_bar'        => __('Media', 'esaco'),
-        'featured_image'        => __('Featured Image', 'esaco'), // penting untuk thumbnail
-        'set_featured_image'    => __('Set featured image', 'esaco'),
-        'remove_featured_image' => __('Remove featured image', 'esaco'),
-        'use_featured_image'    => __('Use as featured image', 'esaco'),
-        // Label lain bisa ditambahkan sesuai kebutuhan
-    );
-
-    $args = array(
-        'label'                 => __('Media', 'esaco'),
-        'description'           => __('Post type for media', 'esaco'),
-        'labels'                => $labels,
-        'supports'              => array('title', 'editor', 'thumbnail', 'excerpt', 'custom-fields'),
-        'public'                => true,
-        'show_ui'               => true,
-        'show_in_menu'          => true,
-        'menu_position'         => 20,
-        'menu_icon'             => 'dashicons-format-video',
-        'has_archive'           => true,
-        'show_in_rest'          => true,
-    );
-    register_post_type('media', $args);
-}
-add_action('init', 'esaco_register_post_type_media', 0);
-
-// Shortcode gabungan filter kategori dan gallery media dengan ajax
+/**
+ * Shortcode menampilkan post 'media' berdasarkan kategori tertentu
+ * jika categories = "slug-kategori1,slug-kategori2", maka filter post sesuai kategori
+ * Jika categories = "all", tampilkan 1 post thumbnail per kategori
+ *
+ * Gunakan:
+ * [media_posts categories="all" posts_per_page="5"]
+ * atau
+ * [media_posts categories="kebakaran,listrik" posts_per_page="5"]
+ */
+// Fungsi shortcode media kategori filter dengan tombol kategori dan popup lightbox
 function media_kategori_filter_shortcode($atts) {
     $atts = shortcode_atts(array(
-        'categories'    => 'kebakaran,listrik,pesawat-uap,pesawat-angkat-angkut,pesawat-tenaga-produksi,konstruksi',
-        'max_post'      => 10,
-        'image_width'   => 300,
-        'image_height'  => 200
+        'categories' => 'kebakaran,listrik,pesawat-uap,pesawat-angkat-angkut,pesawat-tenaga-produksi,konstruksi', // default kategori
+        'max_post' => 10,     // max post yang ditampilkan
+        'image_width' => 300, // lebar gambar thumbnail
+        'image_height' => 220 // tinggi gambar thumbnail
     ), $atts, 'media_kategori_filter');
 
     $category_slugs = array_filter(array_map('trim', explode(',', $atts['categories'])));
-    $categories = !empty($category_slugs) ? get_categories(['slug' => $category_slugs]) : get_categories();
-
     $max_post = intval($atts['max_post']);
-    $img_w = intval($atts['image_width']);
-    $img_h = intval($atts['image_height']);
+
+    // Dapatkan semua kategori yang akan dijadikan tombol filter
+    $all_categories = !empty($category_slugs) ? get_categories(array('slug' => $category_slugs)) : get_categories();
 
     ob_start();
     ?>
-    <div class="media-filter-buttons">
-        <button class="media-filter-btn active" data-category="all">All</button>
-        <?php foreach ($categories as $cat): ?>
-            <button class="media-filter-btn" data-category="<?php echo esc_attr($cat->slug); ?>">
-                <?php echo esc_html($cat->name); ?>
-            </button>
-        <?php endforeach; ?>
-    </div>
-    <div id="media-gallery" class="media-gallery-container"></div>
 
     <style>
-        .media-filter-buttons {
-            margin-bottom: 15px;
-        }
-        .media-filter-btn {
-            cursor: pointer;
-            padding: 8px 15px;
-            margin-right: 8px;
-            border: none;
-            background: #0073aa;
-            color: white;
-            border-radius: 3px;
-            transition: background 0.3s;
-            font-weight: 600; /* contoh styling button sesuai repo */
-        }
-        .media-filter-btn:hover,
-        .media-filter-btn.active {
-            background: #005177;
-        }
-        .media-gallery-container {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-        .media-item {
-            width: <?php echo $img_w; ?>px;
-        }
-        .media-item img {
-            width: 100%;
-            height: auto;
-            border-radius: 5px;
-            cursor: pointer;
-        }
+    /* Styling tombol filter */
+    .media-filter-buttons {
+        margin-bottom: 20px;
+        text-align: center;
+    }
+    .media-filter-button {
+        display: inline-block;
+        margin: 0 8px 12px;
+        padding: 8px 18px;
+        background: #0073aa;
+        color: #fff;
+        border-radius: 18px;
+        cursor: pointer;
+        user-select: none;
+        transition: background-color 0.3s ease;
+        font-weight: 600;
+    }
+    .media-filter-button.active,
+    .media-filter-button:hover {
+        background: #005177;
+    }
+    .media-kategori-filter-gallery {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        justify-content: center;
+    }
+    .media-item-filter {
+        overflow: hidden;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+    .media-item-filter:hover {
+        transform: scale(1.05);
+        box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+    }
+    .media-image {
+        display: block;
+        width: <?= intval($atts['image_width']); ?>px;
+        height: <?= intval($atts['image_height']); ?>px;
+        object-fit: cover;
+        cursor: pointer;
+        border-radius: 8px;
+    }
     </style>
 
-    <script>
-    jQuery(document).ready(function ($) {
-        function loadMedia(categorySlug) {
-            $.ajax({
-                url: '<?php echo admin_url('admin-ajax.php'); ?>',
-                method: 'POST',
-                data: {
-                    action: 'filter_media_posts',
-                    category: categorySlug,
-                    max_post: <?php echo $max_post; ?>
-                },
-                success: function (response) {
-                    var gallery = $('#media-gallery');
-                    gallery.empty();
+    <div class="media-kategori-filter-wrapper">
+        <div class="media-filter-buttons">
+            <span class="media-filter-button active" data-cat="all">All</span>
+            <?php foreach ($all_categories as $cat): ?>
+                <span class="media-filter-button" data-cat="<?= esc_attr($cat->slug); ?>"><?= esc_html($cat->name); ?></span>
+            <?php endforeach; ?>
+        </div>
 
-                    if (response.success && response.data.length) {
-                        $.each(response.data, function (i, post) {
-                            var img = $('<img>').attr('src', post.thumbnail).attr('alt', post.title).attr('title', post.title);
-                            var a = $('<a>').attr('href', post.full_image).attr('target', '_blank').addClass('media-item').append(img);
-                            gallery.append(a);
-                        });
-                    } else {
-                        gallery.html('<p>No media found.</p>');
+        <div class="media-kategori-filter-gallery">
+        <?php
+        // Query semua post dengan thumbnail dan kategori tertentu
+        $args = array(
+            'post_type' => 'post',
+            'posts_per_page' => -1,  // ambil semua dulu
+            'meta_query' => array(
+                array(
+                    'key' => '_thumbnail_id',
+                    'compare' => 'EXISTS'
+                )
+            ),
+            'category_name' => implode(',', $category_slugs), // filter by kategori slug yang diminta
+            'orderby' => 'date',
+            'order' => 'DESC',
+        );
+
+        $query = new WP_Query($args);
+        if ($query->have_posts()):
+            while ($query->have_posts()):
+                $query->the_post();
+                $post_cats = wp_get_post_categories(get_the_ID());
+                $post_cat_slugs = array();
+
+                foreach ($post_cats as $pcat_id) {
+                    $cat_obj = get_category($pcat_id);
+                    if ($cat_obj) {
+                        $post_cat_slugs[] = $cat_obj->slug;
                     }
-                },
-                error: function () {
-                    $('#media-gallery').html('<p>Error loading media.</p>');
+                }
+
+                // Ambil URL gambar full dan thumbnail
+                $full_img_url = get_the_post_thumbnail_url(get_the_ID(), 'full');
+                $thumb_html = get_the_post_thumbnail(get_the_ID(), array(intval($atts['image_width']), intval($atts['image_height'])), array('class' => 'media-image'));
+
+                // Data atribut kategori untuk filtering
+                $data_cats = implode(' ', $post_cat_slugs);
+
+                ?>
+                <div class="media-item-filter" data-cats="<?= esc_attr($data_cats); ?>" style="display:none;">
+                    <a href="<?= esc_url($full_img_url); ?>" data-lightbox="media-kategori-filter" data-title="<?= esc_attr(get_the_title()); ?>">
+                        <?= $thumb_html; ?>
+                    </a>
+                </div>
+                <?php
+            endwhile;
+            wp_reset_postdata();
+        else:
+            echo '<p>Tidak ada media ditemukan.</p>';
+        endif;
+        ?>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const buttons = document.querySelectorAll('.media-filter-button');
+        const items = document.querySelectorAll('.media-item-filter');
+        const maxPost = <?= $max_post; ?>;
+
+        function filterItems(category) {
+            let shownCount = 0;
+            items.forEach(item => {
+                const cats = item.getAttribute('data-cats').split(' ');
+                if (category === 'all' || cats.includes(category)) {
+                    if (shownCount < maxPost) {
+                        item.style.display = 'block';
+                        shownCount++;
+                    } else {
+                        item.style.display = 'none';
+                    }
+                } else {
+                    item.style.display = 'none';
                 }
             });
         }
 
-        // Load all posts on initial page load
-        loadMedia('all');
+        // Tampilkan semua saat awal load
+        filterItems('all');
 
-        // Button filter click handler
-        $('.media-filter-btn').on('click', function () {
-            $('.media-filter-btn').removeClass('active');
-            $(this).addClass('active');
-            var category = $(this).data('category');
-            loadMedia(category);
+        buttons.forEach(btn => {
+            btn.addEventListener('click', function () {
+                buttons.forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                const cat = this.getAttribute('data-cat');
+                filterItems(cat);
+            });
         });
     });
     </script>
+
     <?php
     return ob_get_clean();
 }
 add_shortcode('media_kategori_filter', 'media_kategori_filter_shortcode');
 
-// Jangan lupa buat handler ajax filter_media_posts
-function filter_media_posts_callback() {
-    $category = sanitize_text_field($_POST['category'] ?? '');
-    $max_post = intval($_POST['max_post'] ?? 10);
 
-    $args = [
-        'post_type' => 'media',
-        'posts_per_page' => $max_post,
-        'post_status' => 'publish',
-        'orderby' => 'date',
-        'order' => 'DESC',
-    ];
-
-    if ($category && $category !== 'all') {
-        $args['tax_query'] = [
-            [
-                'taxonomy' => 'category',
-                'field' => 'slug',
-                'terms' => $category,
-            ],
-        ];
-    }
-
-    $query = new WP_Query($args);
-    $items = [];
-
-    if ($query->have_posts()) {
-        while ($query->have_posts()) {
-            $query->the_post();
-            $thumbnail = get_the_post_thumbnail_url(get_the_ID(), 'medium');
-            if (empty($thumbnail)) {
-                $thumbnail = wc_placeholder_img_src(); // fallback jika pakai WooCommerce
-            }
-
-            $items[] = [
-                'id' => get_the_ID(),
-                'title' => get_the_title(),
-                'thumbnail' => $thumbnail ?: '', // link url thumbnail
-                'full_image' => get_the_post_thumbnail_url(get_the_ID(), 'full') ?: '',
-                'permalink' => get_permalink(),
-            ];
+// Enqueue lightbox scripts & styles jika shortcode dipanggil
+function enqueue_lightbox_for_media_kategori_filter() {
+    if (is_singular() || is_page()) {
+        global $post;
+        if ($post && has_shortcode($post->post_content, 'media_kategori_filter')) {
+            wp_enqueue_style('lightbox-css', 'https://cdnjs.cloudflare.com/ajax/libs/lightbox2/2.11.3/css/lightbox.min.css');
+            wp_enqueue_script('lightbox-js', 'https://cdnjs.cloudflare.com/ajax/libs/lightbox2/2.11.3/js/lightbox.min.js', array('jquery'), '2.11.3', true);
         }
-        wp_reset_postdata();
     }
-
-    wp_send_json_success($items);
 }
-add_action('wp_ajax_filter_media_posts', 'filter_media_posts_callback');
-add_action('wp_ajax_nopriv_filter_media_posts', 'filter_media_posts_callback');
-
-// Enqueue jQuery yang dibutuhkan
-function esaco_enqueue_scripts() {
-    wp_enqueue_script('jquery');
-}
-add_action('wp_enqueue_scripts', 'esaco_enqueue_scripts');
+add_action('wp_enqueue_scripts', 'enqueue_lightbox_for_media_kategori_filter');
