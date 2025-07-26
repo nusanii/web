@@ -201,3 +201,4 @@ function enqueue_lightbox_for_media_kategori_filter() {
     }
 }
 add_action('wp_enqueue_scripts', 'enqueue_lightbox_for_media_kategori_filter');
+
