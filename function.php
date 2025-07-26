@@ -8,10 +8,38 @@ add_action('wp_enqueue_scripts', function() {
     wp_enqueue_style('parent-style', get_template_directory_uri() . '/style.css');
 });
 
-/**
- * Shortcode filter kategori + gallery media dengan fitur "All" menampilkan 1 post per kategori
- * Gunakan: [media_kategori_filter categories="kebakaran,listrik,pesawat-uap,pesawat-angkat-angkut,pesawat-tenaga-produksi,konstruksi" max_post="10"]
- */
+// Daftar Custom Post Type Media dengan dukungan thumbnail
+function esaco_register_post_type_media() {
+    $labels = array(
+        'name'                  => _x('Media', 'Post Type General Name', 'esaco'),
+        'singular_name'         => _x('Media', 'Post Type Singular Name', 'esaco'),
+        'menu_name'             => __('Media', 'esaco'),
+        'name_admin_bar'        => __('Media', 'esaco'),
+        'featured_image'        => __('Featured Image', 'esaco'), // penting untuk thumbnail
+        'set_featured_image'    => __('Set featured image', 'esaco'),
+        'remove_featured_image' => __('Remove featured image', 'esaco'),
+        'use_featured_image'    => __('Use as featured image', 'esaco'),
+        // Label lain bisa ditambahkan sesuai kebutuhan
+    );
+
+    $args = array(
+        'label'                 => __('Media', 'esaco'),
+        'description'           => __('Post type for media', 'esaco'),
+        'labels'                => $labels,
+        'supports'              => array('title', 'editor', 'thumbnail', 'excerpt', 'custom-fields'),
+        'public'                => true,
+        'show_ui'               => true,
+        'show_in_menu'          => true,
+        'menu_position'         => 20,
+        'menu_icon'             => 'dashicons-format-video',
+        'has_archive'           => true,
+        'show_in_rest'          => true,
+    );
+    register_post_type('media', $args);
+}
+add_action('init', 'esaco_register_post_type_media', 0);
+
+// Shortcode gabungan filter kategori dan gallery media dengan ajax
 function media_kategori_filter_shortcode($atts) {
     $atts = shortcode_atts(array(
         'categories'    => 'kebakaran,listrik,pesawat-uap,pesawat-angkat-angkut,pesawat-tenaga-produksi,konstruksi',
@@ -27,7 +55,6 @@ function media_kategori_filter_shortcode($atts) {
     $img_w = intval($atts['image_width']);
     $img_h = intval($atts['image_height']);
 
-    // Tombol filter
     ob_start();
     ?>
     <div class="media-filter-buttons">
@@ -53,6 +80,7 @@ function media_kategori_filter_shortcode($atts) {
             color: white;
             border-radius: 3px;
             transition: background 0.3s;
+            font-weight: 600; /* contoh styling button sesuai repo */
         }
         .media-filter-btn:hover,
         .media-filter-btn.active {
@@ -105,14 +133,15 @@ function media_kategori_filter_shortcode($atts) {
             });
         }
 
-        // Initial load all
+        // Load all posts on initial page load
         loadMedia('all');
 
-        // Filter button click
+        // Button filter click handler
         $('.media-filter-btn').on('click', function () {
             $('.media-filter-btn').removeClass('active');
             $(this).addClass('active');
-            loadMedia($(this).data('category'));
+            var category = $(this).data('category');
+            loadMedia(category);
         });
     });
     </script>
@@ -121,168 +150,58 @@ function media_kategori_filter_shortcode($atts) {
 }
 add_shortcode('media_kategori_filter', 'media_kategori_filter_shortcode');
 
-/**
- * Ajax handler untuk filter media posts
- */
-function ajax_filter_media_posts() {
-    $category = isset($_POST['category']) ? sanitize_text_field($_POST['category']) : 'all';
-    $max_post = isset($_POST['max_post']) ? intval($_POST['max_post']) : 10;
+// Jangan lupa buat handler ajax filter_media_posts
+function filter_media_posts_callback() {
+    $category = sanitize_text_field($_POST['category'] ?? '');
+    $max_post = intval($_POST['max_post'] ?? 10);
 
-    // Default categories (bisa sama dengan shortcode)
-    $default_category_slugs = ['kebakaran', 'listrik', 'pesawat-uap', 'pesawat-angkat-angkut', 'pesawat-tenaga-produksi', 'konstruksi'];
-    $categories = get_categories(['slug' => $default_category_slugs]);
+    $args = [
+        'post_type' => 'media',
+        'posts_per_page' => $max_post,
+        'post_status' => 'publish',
+        'orderby' => 'date',
+        'order' => 'DESC',
+    ];
 
-    $result = [];
-
-    if ($category === 'all') {
-        // Ambil 1 post terbaru per kategori
-        foreach ($categories as $cat) {
-            $args = [
-                'post_type'      => 'media',
-                'posts_per_page' => 1,
-                'category_name'  => $cat->slug,
-                'post_status'    => 'publish',
-                'orderby'        => 'date',
-                'order'          => 'DESC',
-            ];
-            $query = new WP_Query($args);
-            if ($query->have_posts()) {
-                $query->the_post();
-                $result[] = [
-                    'title'      => get_the_title(),
-                    'thumbnail'  => get_the_post_thumbnail_url(get_the_ID(), 'medium') ?: esc_url(get_template_directory_uri() . '/assets/images/no-image.jpg'),
-                    'full_image' => get_the_post_thumbnail_url(get_the_ID(), 'full') ?: esc_url(get_template_directory_uri() . '/assets/images/no-image.jpg'),
-                    'category'   => $cat->slug,
-                ];
-                wp_reset_postdata();
-            }
-        }
-    } else {
-        // Ambil sesuai kategori dipilih, maksimal max_post
-        $args = [
-            'post_type'      => 'media',
-            'posts_per_page' => $max_post,
-            'category_name'  => $category,
-            'post_status'    => 'publish',
-            'orderby'        => 'date',
-            'order'          => 'DESC',
+    if ($category && $category !== 'all') {
+        $args['tax_query'] = [
+            [
+                'taxonomy' => 'category',
+                'field' => 'slug',
+                'terms' => $category,
+            ],
         ];
-        $query = new WP_Query($args);
+    }
+
+    $query = new WP_Query($args);
+    $items = [];
+
+    if ($query->have_posts()) {
         while ($query->have_posts()) {
             $query->the_post();
-            $result[] = [
-                'title'      => get_the_title(),
-                'thumbnail'  => get_the_post_thumbnail_url(get_the_ID(), 'medium') ?: esc_url(get_template_directory_uri() . '/assets/images/no-image.jpg'),
-                'full_image' => get_the_post_thumbnail_url(get_the_ID(), 'full') ?: esc_url(get_template_directory_uri() . '/assets/images/no-image.jpg'),
-                'category'   => $category,
+            $thumbnail = get_the_post_thumbnail_url(get_the_ID(), 'medium');
+            if (empty($thumbnail)) {
+                $thumbnail = wc_placeholder_img_src(); // fallback jika pakai WooCommerce
+            }
+
+            $items[] = [
+                'id' => get_the_ID(),
+                'title' => get_the_title(),
+                'thumbnail' => $thumbnail ?: '', // link url thumbnail
+                'full_image' => get_the_post_thumbnail_url(get_the_ID(), 'full') ?: '',
+                'permalink' => get_permalink(),
             ];
         }
         wp_reset_postdata();
     }
 
-    wp_send_json_success($result);
+    wp_send_json_success($items);
 }
-add_action('wp_ajax_filter_media_posts', 'ajax_filter_media_posts');
-add_action('wp_ajax_nopriv_filter_media_posts', 'ajax_filter_media_posts');
+add_action('wp_ajax_filter_media_posts', 'filter_media_posts_callback');
+add_action('wp_ajax_nopriv_filter_media_posts', 'filter_media_posts_callback');
 
-/**
- * Shortcode menampilkan post tipe 'media' tanpa filter kategori
- * Gunakan: [media_posts posts_per_page="5"]
- */
-function shortcode_media_posts($atts) {
-    $atts = shortcode_atts(array(
-        'posts_per_page' => 5,
-    ), $atts, 'media_posts');
-
-    $args = array(
-        'post_type'      => 'media',
-        'posts_per_page' => intval($atts['posts_per_page']),
-        'post_status'    => 'publish',
-        'orderby'        => 'date',
-        'order'          => 'DESC',
-    );
-
-    $query = new WP_Query($args);
-
-    if (!$query->have_posts()) {
-        return '<p>No media posts found.</p>';
-    }
-
-    ob_start();
-    echo '<div class="media-posts-shortcode">';
-    while ($query->have_posts()) {
-        $query->the_post();
-        ?>
-        <article id="post-<?php the_ID(); ?>" <?php post_class(); ?>>
-            <a href="<?php the_permalink(); ?>" class="post-thumbnail-link">
-                <?php 
-                if (has_post_thumbnail()) {
-                    the_post_thumbnail('medium');
-                } else {
-                    echo '<img src="' . esc_url(get_template_directory_uri() . '/assets/images/no-image.jpg') . '" alt="No image">';
-                }
-                ?>
-            </a>
-            <h2 class="entry-title">
-                <a href="<?php the_permalink(); ?>"><?php the_title(); ?></a>
-            </h2>
-            <div class="entry-excerpt"><?php the_excerpt(); ?></div>
-        </article>
-        <?php
-    }
-    echo '</div>';
-    wp_reset_postdata();
-    return ob_get_clean();
+// Enqueue jQuery yang dibutuhkan
+function esaco_enqueue_scripts() {
+    wp_enqueue_script('jquery');
 }
-add_shortcode('media_posts', 'shortcode_media_posts');
-
-/**
- * Shortcode menampilkan post tipe 'news/artikel'
- * Gunakan: [news_posts posts_per_page="5"]
- */
-function shortcode_news_posts($atts) {
-    $atts = shortcode_atts(array(
-        'posts_per_page' => 5,
-    ), $atts, 'news_posts');
-
-    $args = array(
-        'post_type'      => 'news',
-        'posts_per_page' => intval($atts['posts_per_page']),
-        'post_status'    => 'publish',
-        'orderby'        => 'date',
-        'order'          => 'DESC',
-    );
-
-    $query = new WP_Query($args);
-
-    if (!$query->have_posts()) {
-        return '<p>No news posts found.</p>';
-    }
-
-    ob_start();
-    echo '<div class="news-posts-shortcode">';
-    while ($query->have_posts()) {
-        $query->the_post();
-        ?>
-        <article id="post-<?php the_ID(); ?>" <?php post_class(); ?>>
-            <a href="<?php the_permalink(); ?>" class="post-thumbnail-link">
-                <?php 
-                if (has_post_thumbnail()) {
-                    the_post_thumbnail('medium');
-                } else {
-                    echo '<img src="' . esc_url(get_template_directory_uri() . '/assets/images/no-image.jpg') . '" alt="No image">';
-                }
-                ?>
-            </a>
-            <h2 class="entry-title">
-                <a href="<?php the_permalink(); ?>"><?php the_title(); ?></a>
-            </h2>
-            <div class="entry-excerpt"><?php the_excerpt(); ?></div>
-        </article>
-        <?php
-    }
-    echo '</div>';
-    wp_reset_postdata();
-    return ob_get_clean();
-}
-add_shortcode('news_posts', 'shortcode_news_posts');
+add_action('wp_enqueue_scripts', 'esaco_enqueue_scripts');
